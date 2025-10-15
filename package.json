@@ -1,0 +1,20 @@
+{
+    "name": "fire-crackers-billing-client",
+    "version": "0.1.0",
+    "main": "main.js",
+    "scripts": {
+        "start": "electron . --no-sandbox",
+        "dev": "nodemon --watch main.js --watch . --ext js,html,css,json --exec \"electron . --no-sandbox\""
+    },
+    "dependencies": {
+        "electron": "^38.2.2",
+        "escpos": "^2.4.0",
+        "node-fetch": "^2.7.0",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0"
+    },
+    "devDependencies": {
+        "electron-reloader": "^1.2.3",
+        "nodemon": "^3.1.10"
+    }
+}
