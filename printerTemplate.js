@@ -47,6 +47,7 @@ function generatePrintHTML(billData) {
           width: 80mm;
           padding: 5mm;
           background: white;
+          margin: 0 auto;
         }
         
         .header {

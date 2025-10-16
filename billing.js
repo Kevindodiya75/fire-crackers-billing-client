@@ -9,9 +9,16 @@ let billState = {
   success: '',
   items: [],
   grandTotal: 0,
-  finalTotal: 0,
+  finalTotal: 0,  
   billNo: null,
-  focusedItem: null
+  focusedItem: null,
+  lastSavedBillData: null
+};
+
+let gKeyTracker = {
+  count: 0,
+  lastPressTime: 0,
+  timeWindow: 500 
 };
 
 function escapeHTML(s) {
@@ -45,6 +52,23 @@ function recalcTotals() {
   billState.finalTotal = billState.grandTotal * (1 - (billState.discount || 0) / 100);
 }
 
+function allowOnlyNumbers(e, allowEnter = false, onEnterCallback = null) {
+  if ([8, 9, 27, 13, 37, 38, 39, 40, 46].indexOf(e.keyCode) !== -1 ||
+      (e.keyCode === 65 && e.ctrlKey === true) ||
+      (e.keyCode === 67 && e.ctrlKey === true) ||
+      (e.keyCode === 86 && e.ctrlKey === true) ||
+      (e.keyCode === 88 && e.ctrlKey === true)) {
+    if (allowEnter && e.key === 'Enter' && onEnterCallback) {
+      e.preventDefault();
+      onEnterCallback();
+    }
+    return;
+  }
+  if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
+    e.preventDefault();
+  }
+}
+
 function loadPrintModule() {
   return new Promise((resolve, reject) => {
     if (window.printerTemplate && typeof window.printerTemplate.printBill === 'function') {
@@ -63,6 +87,86 @@ function loadPrintModule() {
     };
     document.body.appendChild(script);
   });
+}
+
+async function printBill(billData) {
+  try {
+    await loadPrintModule();
+    
+    if (window.printerTemplate && typeof window.printerTemplate.printBill === 'function') {
+      await window.printerTemplate.printBill(billData);
+      billState.success = `Bill #${billData.bill_no} sent to printer!`;
+    } else {
+      console.warn('Print module not loaded');
+      billState.success = `Print module not available`;
+    }
+  } catch (printErr) {
+    console.error('Print error:', printErr);
+    billState.error = `Print error: ${printErr.message}`;
+  }
+  renderBilling();
+}
+
+async function saveBill() {
+  if (!billState.lines.length) {
+    billState.error = 'Add at least one item';
+    renderBilling();
+    return null;
+  }
+  
+  const saveBtn = document.getElementById('save-bill');
+  const originalText = saveBtn ? saveBtn.textContent : 'Save & Print Bill';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+  }
+  
+  const headers = { 'Content-Type': 'application/json' };
+  if (window.appState && window.appState.token) headers.Authorization = 'Bearer ' + window.appState.token;
+  
+  try {
+    const res = await (typeof proxyFetch === 'function'
+      ? proxyFetch('/api/bills', { method: 'POST', headers, body: JSON.stringify({ lines: billState.lines, discount_pct: billState.discount }) })
+      : fetch(`${BILLING_API_BASE}/api/bills`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ lines: billState.lines, discount_pct: billState.discount }) }));
+    const data = await (res.json ? res.json() : res.json());
+    if (!res.ok) throw new Error(data.error || 'Save failed');
+    
+    const billDataForPrint = {
+      bill_no: data.bill_no,
+      lines: billState.lines,
+      grand_total: billState.grandTotal,
+      discount_pct: billState.discount,
+      final_total: billState.finalTotal,
+      created_at: new Date().toISOString()
+    };
+    
+    billState.lastSavedBillData = billDataForPrint;
+    billState.success = `Bill #${data.bill_no} saved!`;
+    
+    billState.lines = [];
+    billState.discount = 0;
+    billState.grandTotal = 0;
+    billState.finalTotal = 0;
+    renderBilling();
+    
+    return billDataForPrint;
+  } catch (err) {
+    billState.error = err.message || 'Save failed';
+    renderBilling();
+    return null;
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = originalText;
+    }
+  }
+}
+
+async function saveAndPrintBill() {
+  const billData = await saveBill();
+  if (billData) {
+    await printBill(billData);
+  }
 }
 
 function renderBilling() {
@@ -93,10 +197,10 @@ function renderBilling() {
   </thead>
   <tbody>
     <tr class="entry-row">
-      <td class="input-cell"><input id="item-code" class="input-code" inputmode="numeric" placeholder="Code" value="${escapeHTML(billState.itemCode)}" /></td>
+      <td class="input-cell"><input id="item-code" class="input-code" inputmode="numeric" placeholder="Code" value="${escapeHTML(billState.itemCode)}" type="text" pattern="[0-9]*" /></td>
       <td class="input-cell"><input id="item-name" class="input-name readonly-input" placeholder="Item name" value="${escapeHTML(billState.focusedItem ? billState.focusedItem.name : '')}" readonly /></td>
       <td class="input-cell"><input id="item-price" class="input-price readonly-input" placeholder="Price" value="${billState.focusedItem ? Number(billState.focusedItem.price).toFixed(2) : ''}" readonly /></td>
-      <td class="input-cell"><input id="qty" class="input-qty" type="number" min="1" step="1" placeholder="" value="${escapeHTML(billState.qty)}" /></td>
+      <td class="input-cell"><input id="qty" class="input-qty" type="text" inputmode="numeric" pattern="[0-9]*" min="1" step="1" placeholder="" value="${escapeHTML(billState.qty)}" /></td>
       <td class="input-cell total" id="entry-total">${billState.focusedItem && billState.qty ? (Number(billState.qty) * Number(billState.focusedItem.price)).toFixed(2) : ''}</td>
       <td class="input-cell"><button id="add-btn" class="add-btn">Add</button></td>
     </tr>
@@ -135,7 +239,7 @@ function renderBilling() {
       <b>Grand Total:</b> ₹${billState.grandTotal.toFixed(2)} &nbsp;&nbsp; <b>Final Total:</b> ₹${billState.finalTotal.toFixed(2)}
     </div>
 
-    <button id="save-bill" style="margin-top:12px;width:100%;font-size:1.05em;">Save & Print Bill</button>
+    <button id="save-bill" style="margin-top:12px;width:100%;font-size:1.05em;">Save & Print Bill (or press G once to save, GG to print)</button>
     <div class="success" style="color:green;margin-top:8px">${escapeHTML(billState.success)}</div>
     <button id="logout-btn" style="margin-top:8px;width:100%;">Logout</button>
   `;
@@ -172,10 +276,12 @@ function renderBilling() {
   }
 
   codeEl.addEventListener('input', (e) => {
+    e.target.value = e.target.value.replace(/[^0-9]/g, '');
     updatePreviewForCode(e.target.value.trim());
   });
   
 codeEl.addEventListener('keydown', (e) => {
+  allowOnlyNumbers(e);
   if (e.key === 'Tab') {
     e.preventDefault();
     if (qtyEl) {
@@ -193,6 +299,7 @@ codeEl.addEventListener('keydown', (e) => {
   });
 
   qtyEl.addEventListener('input', () => {
+    qtyEl.value = qtyEl.value.replace(/[^0-9]/g, '');
     billState.qty = qtyEl.value;
     if (billState.focusedItem && billState.qty) {
       const total = Number(billState.qty || 0) * Number(billState.focusedItem.price || 0);
@@ -203,10 +310,7 @@ codeEl.addEventListener('keydown', (e) => {
   });
 
   qtyEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      addBtn.click();
-    }
+    allowOnlyNumbers(e, true, () => addBtn.click());
   });
 
   addBtn.onclick = () => {
@@ -254,71 +358,20 @@ codeEl.addEventListener('keydown', (e) => {
 
   const discountEl = document.getElementById('discount');
   if (discountEl) {
-    discountEl.oninput = e => {
+    discountEl.addEventListener('input', e => {
+      e.target.value = e.target.value.replace(/[^0-9]/g, '');
       billState.discount = Number(e.target.value) || 0;
       recalcTotals();
       renderBilling();
-    };
+    });
+    
+    discountEl.addEventListener('keydown', (e) => {
+      allowOnlyNumbers(e);
+    });
   }
 
   document.getElementById('save-bill').onclick = async () => {
-    if (!billState.lines.length) {
-      billState.error = 'Add at least one item';
-      renderBilling();
-      return;
-    }
-    
-    const saveBtn = document.getElementById('save-bill');
-    const originalText = saveBtn.textContent;
-    saveBtn.disabled = true;
-    saveBtn.textContent = 'Saving...';
-    
-    const headers = { 'Content-Type': 'application/json' };
-    if (window.appState && window.appState.token) headers.Authorization = 'Bearer ' + window.appState.token;
-    try {
-      const res = await (typeof proxyFetch === 'function'
-        ? proxyFetch('/api/bills', { method: 'POST', headers, body: JSON.stringify({ lines: billState.lines, discount_pct: billState.discount }) })
-        : fetch(`${BILLING_API_BASE}/api/bills`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ lines: billState.lines, discount_pct: billState.discount }) }));
-      const data = await (res.json ? res.json() : res.json());
-      if (!res.ok) throw new Error(data.error || 'Save failed');
-      
-      const billDataForPrint = {
-        bill_no: data.bill_no,
-        lines: billState.lines,
-        grand_total: billState.grandTotal,
-        discount_pct: billState.discount,
-        final_total: billState.finalTotal,
-        created_at: new Date().toISOString()
-      };
-      
-      saveBtn.textContent = 'Loading printer...';
-      try {
-        await loadPrintModule();
-        
-        if (window.printerTemplate && typeof window.printerTemplate.printBill === 'function') {
-          await window.printerTemplate.printBill(billDataForPrint);
-          billState.success = `Bill #${data.bill_no} saved & sent to printer!`;
-        } else {
-          console.warn('Print module not loaded');
-          billState.success = `Bill #${data.bill_no} saved! (Print module not available)`;
-        }
-      } catch (printErr) {
-        console.error('Print error:', printErr);
-        billState.success = `Bill #${data.bill_no} saved! (Print error: ${printErr.message})`;
-      }
-      
-      billState.lines = [];
-      billState.discount = 0;
-      billState.grandTotal = 0;
-      billState.finalTotal = 0;
-      renderBilling();
-    } catch (err) {
-      billState.error = err.message || 'Save failed';
-      renderBilling();
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = originalText;
-    }
+    await saveAndPrintBill();
   };
 
   document.getElementById('logout-btn').onclick = async () => {
@@ -336,6 +389,44 @@ codeEl.addEventListener('keydown', (e) => {
 async function startBillingUI() {
   await fetchActiveItems();
   renderBilling();
+  
+  document.addEventListener('keydown', async (e) => {
+    if (e.key.toLowerCase() === 'd' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      const discountEl = document.getElementById('discount');
+      if (discountEl) {
+        discountEl.focus();
+        discountEl.select();
+      }
+      return;
+    }
+    
+    if (e.key.toLowerCase() === 'g' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      const now = Date.now();
+      
+      if (now - gKeyTracker.lastPressTime > gKeyTracker.timeWindow) {
+        gKeyTracker.count = 0;
+      }
+      
+      gKeyTracker.count++;
+      gKeyTracker.lastPressTime = now;
+      
+      if (gKeyTracker.count === 1) {
+        await saveBill();
+      } else if (gKeyTracker.count === 2) {
+        gKeyTracker.count = 0;
+        if (billState.lastSavedBillData) {
+          await printBill(billState.lastSavedBillData);
+        } else {
+          billState.error = 'No bill to print';
+          renderBilling();
+        }
+      }
+    }
+  }, true);   
 }
 
 window.startBillingUI = startBillingUI;
