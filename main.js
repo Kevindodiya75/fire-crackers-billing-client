@@ -45,3 +45,52 @@ ipcMain.handle('api-fetch', async (event, { path, opts }) => {
     return { error: err.message };
   }
 });
+
+ipcMain.handle('print-bill', async (event, htmlContent) => {
+  try {
+    const printWindow = new BrowserWindow({
+      width: 800,
+      height: 600,
+      show: true, 
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`);
+
+    await printWindow.webContents.executeJavaScript('document.readyState');
+
+    return new Promise((resolve, reject) => {
+      printWindow.webContents.print(
+        {
+          silent: false, 
+          printBackground: true,
+          deviceName: '', 
+          margins: {
+            marginType: 'none' 
+          },
+          pageSize: { width: 80000, height: 200000 } 
+        },
+        (success, errorType) => {
+          setTimeout(() => {
+            if (!printWindow.isDestroyed()) {
+              printWindow.close();
+            }
+          }, 500);
+          
+          if (success) {
+            resolve({ success: true });
+          } else {
+            reject(new Error(`Print failed: ${errorType}`));
+          }
+        }
+      );
+    });
+  } catch (error) {
+    console.error('Print error:', error);
+    throw error;
+  }
+});

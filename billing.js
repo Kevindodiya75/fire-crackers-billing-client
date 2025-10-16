@@ -115,7 +115,7 @@ function renderBilling() {
       <b>Grand Total:</b> ₹${billState.grandTotal.toFixed(2)} &nbsp;&nbsp; <b>Final Total:</b> ₹${billState.finalTotal.toFixed(2)}
     </div>
 
-    <button id="save-bill" style="margin-top:12px;width:100%;font-size:1.05em;">Save Bill</button>
+    <button id="save-bill" style="margin-top:12px;width:100%;font-size:1.05em;">Save & Print Bill</button>
     <div class="success" style="color:green;margin-top:8px">${escapeHTML(billState.success)}</div>
     <button id="logout-btn" style="margin-top:8px;width:100%;">Logout</button>
   `;
@@ -255,7 +255,29 @@ codeEl.addEventListener('keydown', (e) => {
         : fetch(`${BILLING_API_BASE}/api/bills`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ lines: billState.lines, discount_pct: billState.discount }) }));
       const data = await (res.json ? res.json() : res.json());
       if (!res.ok) throw new Error(data.error || 'Save failed');
-      billState.success = `Bill #${data.bill_no} saved!`;
+      
+      const billDataForPrint = {
+        bill_no: data.bill_no,
+        lines: billState.lines,
+        grand_total: billState.grandTotal,
+        discount_pct: billState.discount,
+        final_total: billState.finalTotal,
+        created_at: new Date().toISOString()
+      };
+      
+      try {
+        if (window.printerTemplate && typeof window.printerTemplate.printBill === 'function') {
+          await window.printerTemplate.printBill(billDataForPrint);
+          billState.success = `Bill #${data.bill_no} saved & sent to printer!`;
+        } else {
+          console.warn('Print module not loaded');
+          billState.success = `Bill #${data.bill_no} saved! (Print module not available)`;
+        }
+      } catch (printErr) {
+        console.error('Print error:', printErr);
+        billState.success = `Bill #${data.bill_no} saved! (Print error: ${printErr.message})`;
+      }
+      
       billState.lines = [];
       billState.discount = 0;
       billState.grandTotal = 0;
