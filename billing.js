@@ -45,6 +45,26 @@ function recalcTotals() {
   billState.finalTotal = billState.grandTotal * (1 - (billState.discount || 0) / 100);
 }
 
+function loadPrintModule() {
+  return new Promise((resolve, reject) => {
+    if (window.printerTemplate && typeof window.printerTemplate.printBill === 'function') {
+      resolve();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'printerTemplate.js';
+    script.onload = () => {
+      console.log('printerTemplate.js loaded');
+      resolve();
+    };
+    script.onerror = () => {
+      console.error('Failed to load printerTemplate.js');
+      reject(new Error('Failed to load print module'));
+    };
+    document.body.appendChild(script);
+  });
+}
+
 function renderBilling() {
   recalcTotals();
   const app = document.getElementById('app');
@@ -247,6 +267,12 @@ codeEl.addEventListener('keydown', (e) => {
       renderBilling();
       return;
     }
+    
+    const saveBtn = document.getElementById('save-bill');
+    const originalText = saveBtn.textContent;
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+    
     const headers = { 'Content-Type': 'application/json' };
     if (window.appState && window.appState.token) headers.Authorization = 'Bearer ' + window.appState.token;
     try {
@@ -265,7 +291,10 @@ codeEl.addEventListener('keydown', (e) => {
         created_at: new Date().toISOString()
       };
       
+      saveBtn.textContent = 'Loading printer...';
       try {
+        await loadPrintModule();
+        
         if (window.printerTemplate && typeof window.printerTemplate.printBill === 'function') {
           await window.printerTemplate.printBill(billDataForPrint);
           billState.success = `Bill #${data.bill_no} saved & sent to printer!`;
@@ -286,6 +315,9 @@ codeEl.addEventListener('keydown', (e) => {
     } catch (err) {
       billState.error = err.message || 'Save failed';
       renderBilling();
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = originalText;
     }
   };
 
