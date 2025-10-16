@@ -14,6 +14,8 @@ let billState = {
   focusedItem: null
 };
 
+let itemsFetchInterval = null;
+
 function escapeHTML(s) {
   if (s == null) return '';
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
@@ -297,6 +299,12 @@ codeEl.addEventListener('keydown', (e) => {
         await fetch(`${BILLING_API_BASE}/api/logout`, { method: 'POST', credentials: 'include' });
       }
     } catch (_) {}
+    
+    if (itemsFetchInterval) {
+      clearInterval(itemsFetchInterval);
+      itemsFetchInterval = null;
+    }
+    
     window.location.reload();
   };
 }
@@ -304,6 +312,13 @@ codeEl.addEventListener('keydown', (e) => {
 async function startBillingUI() {
   await fetchActiveItems();
   renderBilling();
+  
+  if (itemsFetchInterval) {
+    clearInterval(itemsFetchInterval);
+  }
+  itemsFetchInterval = setInterval(async () => {
+    await fetchActiveItems();
+  }, 1000);
 }
 
 window.startBillingUI = startBillingUI;

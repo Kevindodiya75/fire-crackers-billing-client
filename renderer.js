@@ -6,6 +6,7 @@ let state = {
   role: null,
   error: '',
   users: [],
+  activeTab: 'users',
 };
 
 function setAppStateToken(token) {
@@ -149,24 +150,70 @@ function renderCreateUser() {
   `;
 }
 
+function renderAdminTabs() {
+  return `
+    <div class="admin-tabs">
+      <button onclick="switchTab('users')" class="tab-btn ${state.activeTab === 'users' ? 'active' : ''}">Users</button>
+      <button onclick="switchTab('items')" class="tab-btn ${state.activeTab === 'items' ? 'active' : ''}">Items</button>
+    </div>
+  `;
+}
+
 function renderAdmin() {
   app.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between">
       <div><strong>Admin Console</strong></div>
       <div><button id="logout-btn">Logout</button></div>
     </div>
-    ${renderCreateUser()}
-    ${renderUserList()}
-    ${state.loading ? '<div style="margin-top:8px">Loading users...</div>' : ''}
+    ${renderAdminTabs()}
+    <div>
+      ${state.activeTab === 'users' ? `
+        ${renderCreateUser()}
+        ${renderUserList()}
+      ` : `
+        <div id="items-container">Loading items...</div>
+      `}
+    </div>
   `;
+  
   document.getElementById('logout-btn').onclick = async () => {
     try {
       await proxyFetch('/api/logout', { method: 'POST' });
     } catch (_) {}
-    state = { token: null, role: null, error: '', users: [] };
+    state = { token: null, role: null, error: '', users: [], activeTab: 'users' };
     setAppStateToken(null);
     render();
   };
+  
+  if (state.activeTab === 'users') {
+    setupUserForm();
+  } else if (state.activeTab === 'items') {
+    loadItemsModule();
+  }
+}
+
+function loadItemsModule() {
+  if (!window.initItemsManagement) {
+    const script = document.createElement('script');
+    script.src = 'items.js';
+    script.onload = () => {
+      console.log('items.js loaded dynamically');
+      window.initItemsManagement && window.initItemsManagement();
+    };
+    script.onerror = () => {
+      console.error('Failed to load items.js');
+      const container = document.getElementById('items-container');
+      if (container) {
+        container.innerHTML = '<div class="error">Failed to load items module</div>';
+      }
+    };
+    document.body.appendChild(script);
+  } else {
+    window.initItemsManagement();
+  }
+}
+
+function setupUserForm() {
   const form = document.getElementById('create-user-form');
   const createBtn = document.getElementById('create-btn');
   const createLoading = document.getElementById('create-loading');
@@ -197,6 +244,11 @@ function renderAdmin() {
     }
   };
 }
+
+window.switchTab = (tab) => {
+  state.activeTab = tab;
+  render();
+};
 
 function renderBiller() {
   if (!window.startBillingUI) {
