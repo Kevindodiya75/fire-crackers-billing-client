@@ -18,7 +18,7 @@ let billState = {
 let gKeyTracker = {
   count: 0,
   lastPressTime: 0,
-  timeWindow: 500 
+  timeWindow: 2000
 };
 
 function escapeHTML(s) {
@@ -49,7 +49,8 @@ function findItemByCode(code) {
 
 function recalcTotals() {
   billState.grandTotal = billState.lines.reduce((sum, l) => sum + l.qty * l.price, 0);
-  billState.finalTotal = billState.grandTotal * (1 - (billState.discount || 0) / 100);
+  billState.finalTotal = billState.grandTotal - (billState.discount || 0);
+  if (billState.finalTotal < 0) billState.finalTotal = 0;
 }
 
 function allowOnlyNumbers(e, allowEnter = false, onEnterCallback = null) {
@@ -96,6 +97,7 @@ async function printBill(billData) {
     if (window.printerTemplate && typeof window.printerTemplate.printBill === 'function') {
       await window.printerTemplate.printBill(billData);
       billState.success = `Bill #${billData.bill_no} sent to printer!`;
+      billState.lastSavedBillData = null;
     } else {
       console.warn('Print module not loaded');
       billState.success = `Print module not available`;
@@ -126,16 +128,23 @@ async function saveBill() {
   
   try {
     const res = await (typeof proxyFetch === 'function'
-      ? proxyFetch('/api/bills', { method: 'POST', headers, body: JSON.stringify({ lines: billState.lines, discount_pct: billState.discount }) })
-      : fetch(`${BILLING_API_BASE}/api/bills`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ lines: billState.lines, discount_pct: billState.discount }) }));
+      ? proxyFetch('/api/bills', { method: 'POST', headers, body: JSON.stringify({ 
+          lines: billState.lines, 
+          discount_pct: billState.grandTotal > 0 ? ((billState.discount / billState.grandTotal) * 100) : 0
+        }) })
+      : fetch(`${BILLING_API_BASE}/api/bills`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ 
+          lines: billState.lines, 
+          discount_pct: billState.grandTotal > 0 ? ((billState.discount / billState.grandTotal) * 100) : 0
+        }) }));
     const data = await (res.json ? res.json() : res.json());
     if (!res.ok) throw new Error(data.error || 'Save failed');
     
+    // Store bill data BEFORE clearing - make a deep copy of lines
     const billDataForPrint = {
       bill_no: data.bill_no,
-      lines: billState.lines,
+      lines: JSON.parse(JSON.stringify(billState.lines)),
       grand_total: billState.grandTotal,
-      discount_pct: billState.discount,
+      discount_pct: billState.grandTotal > 0 ? ((billState.discount / billState.grandTotal) * 100) : 0,
       final_total: billState.finalTotal,
       created_at: new Date().toISOString()
     };
@@ -143,11 +152,11 @@ async function saveBill() {
     billState.lastSavedBillData = billDataForPrint;
     billState.success = `Bill #${data.bill_no} saved!`;
     
+    // Clear the form AFTER storing
     billState.lines = [];
     billState.discount = 0;
     billState.grandTotal = 0;
     billState.finalTotal = 0;
-    renderBilling();
     
     return billDataForPrint;
   } catch (err) {
@@ -166,6 +175,9 @@ async function saveAndPrintBill() {
   const billData = await saveBill();
   if (billData) {
     await printBill(billData);
+  } else {
+    billState.error = billState.error || 'Cannot print - save failed';
+    renderBilling();
   }
 }
 
@@ -231,15 +243,18 @@ function renderBilling() {
   </tbody>
 </table>
 
-    <div style="margin-top:10px;">
-      <label>Discount %: <input id="discount" type="number" min="0" max="100" value="${escapeHTML(billState.discount)}" style="width:60px;" /></label>
-    </div>
-
     <div style="margin-top:10px;font-size:1.1em;">
-      <b>Grand Total:</b> ₹${billState.grandTotal.toFixed(2)} &nbsp;&nbsp; <b>Final Total:</b> ₹${billState.finalTotal.toFixed(2)}
+      <div><b>Grand Total:</b> <span class="grand-total-value">₹${billState.grandTotal.toFixed(2)}</span></div>
+      <div style="margin-top:4px;">
+        <b>Discount %:</b> <input id="discount-percent" type="number" min="0" max="100" step="0.01" value="0" style="width:80px;border:1px solid #ccc;padding:2px 4px;font-size:1em;" />
+        <span style="margin-left:10px;"><b>or ₹:</b></span> <input id="discount" type="number" min="0" step="0.01" value="${billState.discount}" style="width:100px;border:1px solid #ccc;padding:2px 4px;font-size:1em;" />
+      </div>
+      <div style="margin-top:4px;font-size:1.15em;">
+        <b>Final Total:</b> <span class="final-total-value">₹${billState.finalTotal.toFixed(2)}</span>
+      </div>
     </div>
 
-    <button id="save-bill" style="margin-top:12px;width:100%;font-size:1.05em;">Save & Print Bill (or press G once to save, GG to print)</button>
+    <button id="save-bill" style="margin-top:12px;width:100%;font-size:1.05em;">Save & Print Bill</button>
     <div class="success" style="color:green;margin-top:8px">${escapeHTML(billState.success)}</div>
     <button id="logout-btn" style="margin-top:8px;width:100%;">Logout</button>
   `;
@@ -280,19 +295,19 @@ function renderBilling() {
     updatePreviewForCode(e.target.value.trim());
   });
   
-codeEl.addEventListener('keydown', (e) => {
-  allowOnlyNumbers(e);
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    if (qtyEl) {
-      qtyEl.focus();
-      qtyEl.select();
+  codeEl.addEventListener('keydown', (e) => {
+    allowOnlyNumbers(e);
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (qtyEl) {
+        qtyEl.focus();
+        qtyEl.select();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (qtyEl) qtyEl.focus();
     }
-  } else if (e.key === 'Enter') {
-    e.preventDefault();
-    if (qtyEl) qtyEl.focus();
-  }
-});
+  });
 
   codeEl.addEventListener('blur', () => {
     updatePreviewForCode(codeEl.value.trim());
@@ -357,16 +372,76 @@ codeEl.addEventListener('keydown', (e) => {
   });
 
   const discountEl = document.getElementById('discount');
+  const discountPercentEl = document.getElementById('discount-percent');
+  
+  if (discountPercentEl) {
+    discountPercentEl.addEventListener('input', e => {
+      e.target.value = e.target.value.replace(/[^0-9.]/g, '');
+      let percent = Number(e.target.value) || 0;
+      
+      if (percent > 100) {
+        percent = 100;
+        e.target.value = '100';
+      }
+      
+      billState.discount = (billState.grandTotal * percent) / 100;
+      
+      if (discountEl) {
+        discountEl.value = billState.discount.toFixed(2);
+      }
+      
+      recalcTotals();
+      
+      const finalTotalEl = document.querySelector('.final-total-value');
+      if (finalTotalEl) finalTotalEl.textContent = `₹${billState.finalTotal.toFixed(2)}`;
+    });
+    
+    discountPercentEl.addEventListener('keydown', (e) => {
+      if ([8, 9, 27, 13, 37, 38, 39, 40, 46, 190, 110].indexOf(e.keyCode) !== -1 ||
+          (e.keyCode === 65 && e.ctrlKey === true) ||
+          (e.keyCode === 67 && e.ctrlKey === true) ||
+          (e.keyCode === 86 && e.ctrlKey === true) ||
+          (e.keyCode === 88 && e.ctrlKey === true)) {
+        return;
+      }
+      if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
+        e.preventDefault();
+      }
+    });
+  }
+  
   if (discountEl) {
     discountEl.addEventListener('input', e => {
-      e.target.value = e.target.value.replace(/[^0-9]/g, '');
+      e.target.value = e.target.value.replace(/[^0-9.]/g, '');
       billState.discount = Number(e.target.value) || 0;
+      
+      if (billState.discount > billState.grandTotal) {
+        billState.discount = billState.grandTotal;
+        e.target.value = billState.grandTotal.toFixed(2);
+      }
+      
+      if (discountPercentEl && billState.grandTotal > 0) {
+        const calculatedPercent = (billState.discount / billState.grandTotal) * 100;
+        discountPercentEl.value = calculatedPercent.toFixed(2);
+      }
+      
       recalcTotals();
-      renderBilling();
+      
+      const finalTotalEl = document.querySelector('.final-total-value');
+      if (finalTotalEl) finalTotalEl.textContent = `₹${billState.finalTotal.toFixed(2)}`;
     });
     
     discountEl.addEventListener('keydown', (e) => {
-      allowOnlyNumbers(e);
+      if ([8, 9, 27, 13, 37, 38, 39, 40, 46, 190, 110].indexOf(e.keyCode) !== -1 ||
+          (e.keyCode === 65 && e.ctrlKey === true) ||
+          (e.keyCode === 67 && e.ctrlKey === true) ||
+          (e.keyCode === 86 && e.ctrlKey === true) ||
+          (e.keyCode === 88 && e.ctrlKey === true)) {
+        return;
+      }
+      if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
+        e.preventDefault();
+      }
     });
   }
 
@@ -415,13 +490,27 @@ async function startBillingUI() {
       gKeyTracker.lastPressTime = now;
       
       if (gKeyTracker.count === 1) {
-        await saveBill();
+        const billData = await saveBill();
+        if (billData) {
+          renderBilling();
+        }
       } else if (gKeyTracker.count === 2) {
         gKeyTracker.count = 0;
-        if (billState.lastSavedBillData) {
-          await printBill(billState.lastSavedBillData);
+        // If there are items in the current bill, save and print the current bill
+        if (billState.lines.length > 0) {
+          const billData = await saveBill();
+          if (billData) {
+            await printBill(billData);
+          } else {
+            billState.error = billState.error || 'Cannot print - save failed';
+            renderBilling();
+          }
+        } else if (billState.lastSavedBillData) {
+          // Only print old bill if there are no new items
+          const billToPrint = billState.lastSavedBillData;
+          await printBill(billToPrint);
         } else {
-          billState.error = 'No bill to print';
+          billState.error = 'No bill to save and print. Add items first.';
           renderBilling();
         }
       }
